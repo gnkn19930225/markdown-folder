@@ -368,3 +368,70 @@ GPU（VRAM）    CPU（RAM）
 | 全 CPU | 🐢 最慢 | 沒有 GPU 或 VRAM 完全不足 |
 
 > **建議：** 盡量選擇能完全載入 VRAM 的模型大小/量化版本，避免混用帶來的性能損失。
+
+---
+
+## gpt-oss:120b vs DeepSeek-R1 (671B)
+
+這兩者是**「精兵」vs「大軍」**的對決。
+
+### DeepSeek-R1 (671B)
+
+- **優勢：** 它是**「力大磚飛」的代表**。因為參數極大（671B），它的「世界知識（World Knowledge）」**非常豐富**，對於極端冷門的語言、歷史事實、或長尾知識，它比 120b 更強。它像是一個博學多聞的大學教授，什麼都知道一點。
+- **劣勢：** 太大了。即使是 MoE 架構，它的 KV Cache 和權重加載都需要巨大的頻寬。推論速度（Tokens/s）在本地跑通常很慢（除非你有 H100 叢集）。
+
+### gpt-oss:120b
+
+- **優勢：** 它是**「特種部隊」**。雖然總參數只有 120B（約 DeepSeek 的 1/6），但它透過更強的訓練數據和 Chain-of-Thought（CoT）強化，在「純邏輯推理（Math/Code）」**上，表現得比 DeepSeek-R1 更犀利、更不易出錯。
+- **劣勢：** 百科全書式的知識儲備不如 DeepSeek-R1。
+
+### 結論
+
+如果你是為了寫 Code、算數學、做邏輯分析，`gpt-oss:120b` 常常能以更小的代價打平甚至超越 DeepSeek-R1。但如果你是拿來當「搜尋引擎」問歷史地理，DeepSeek-R1 還是比較穩。
+
+---
+
+## Ollama API：`/api/generate` vs `/api/chat`
+
+| 比較項目 | `/api/generate` | `/api/chat` |
+|----------|-----------------|-------------|
+| 輸入格式 | 單一 `prompt` 字串 | `messages` 陣列（role + content） |
+| 對話歷史 | 不管理，需自己拼接 | 內建多輪對話結構 |
+| 角色區分 | 無（全部塞在 prompt） | 有 `system`、`user`、`assistant` |
+| 適用場景 | 單次補全、模板填充、非對話任務 | 多輪對話、聊天機器人 |
+| 類比 | 像 OpenAI 的 Completions API | 像 OpenAI 的 Chat Completions API |
+
+### `/api/generate` 範例
+
+```bash
+curl http://localhost:11434/api/generate -d '{
+  "model": "llama3",
+  "prompt": "什麼是量子力學？",
+  "stream": false,  # true（預設）：逐 token 即時回傳；false：生成完畢才一次回傳
+  "format": "json"  # 強制模型輸出合法 JSON 格式
+}'
+```
+
+適合一問一答、或自己手動組 prompt 的場景。
+
+### `/api/chat` 範例
+
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "llama3",
+  "messages": [
+    { "role": "system", "content": "你是一個專業的物理老師" },
+    { "role": "user", "content": "什麼是量子力學？" },
+    { "role": "assistant", "content": "量子力學是研究微觀粒子行為的物理學分支..." },
+    { "role": "user", "content": "可以舉個例子嗎？" }
+  ],
+  "stream": false
+}'
+```
+
+適合需要多輪對話、角色設定的應用。
+
+### 怎麼選？
+
+- **寫應用/聊天機器人** → 用 `/api/chat`（結構清楚、好管理）
+- **單次任務（摘要、翻譯、程式碼補全）** → 用 `/api/generate`（簡單直接）
