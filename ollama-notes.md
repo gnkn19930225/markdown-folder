@@ -435,3 +435,432 @@ curl http://localhost:11434/api/chat -d '{
 
 - **寫應用/聊天機器人** → 用 `/api/chat`（結構清楚、好管理）
 - **單次任務（摘要、翻譯、程式碼補全）** → 用 `/api/generate`（簡單直接）
+
+---
+
+## RAG 資料檢索方法
+
+RAG（Retrieval-Augmented Generation）的核心是為 LLM 提供外部知識。常見的資料來源取得方式：
+
+### 1. 網路搜尋（Google Search）
+
+透過搜尋引擎取得即時、最新的網路資料作為 context。
+
+**常用方式：**
+| 方法 | 說明 |
+|------|------|
+| Google Custom Search API | 官方 API，需申請 API Key |
+| SerpAPI | 第三方封裝，較方便 |
+| DuckDuckGo API | 免費替代方案 |
+
+**流程：**
+```
+使用者問題 → 搜尋引擎 → 取得相關網頁 → 擷取內容 → 組成 context → 餵給 LLM
+```
+
+### 2. PDF 文件解析
+
+使用 PDF Library 提取本地文件內容。
+
+**常用 Python Library：**
+| Library | 特點 |
+|---------|------|
+| PyPDF2 | 輕量、基本文字提取 |
+| pdfplumber | 支援表格提取 |
+| PyMuPDF (fitz) | 速度快、功能全面 |
+| LangChain PDF Loader | 整合 RAG pipeline |
+
+**基本流程：**
+```
+PDF 文件 → 文字提取 → 切分 chunks → 向量化 → 存入向量資料庫 → 檢索相關片段 → 餵給 LLM
+```
+
+### 3. 兩種方法比較
+
+| 比較項目 | Google Search | PDF Library |
+|----------|---------------|-------------|
+| 資料來源 | 網路（即時） | 本地文件（靜態） |
+| 資料新鮮度 | 高 | 取決於文件 |
+| 隱私性 | 低（需連網） | 高（本地處理） |
+| 適用場景 | 新聞、即時資訊 | 內部文件、專業知識庫 |
+
+---
+
+## Fine-tune vs RAG 選擇
+
+兩種讓模型「變聰明」的方式，解決不同問題。
+
+### 比較表
+
+| 比較項目 | Fine-tune | RAG |
+|----------|-----------|-----|
+| **解決什麼問題** | 模型「怎麼說」 | 模型「知道什麼」 |
+| **改變的是** | 行為、風格、格式 | 知識、資訊來源 |
+| **成本** | 高（需訓練資源） | 低（只需檢索系統） |
+| **更新難度** | 重新訓練 | 換文件即可 |
+
+### 快速判斷法
+
+```
+模型回答得「不對」？
+    │
+    ├─ 內容錯誤／不知道 ──→ 用 RAG（給它正確資料）
+    │
+    └─ 風格／格式不對 ──→ 用 Fine-tune（改變它的行為）
+```
+
+### 用 RAG 的情況
+
+| 場景 | 原因 |
+|------|------|
+| 公司內部文件問答 | 模型從沒見過這些資料 |
+| 最新新聞/資訊 | 訓練資料有截止日期 |
+| 產品規格查詢 | 需要精確數據，不能幻想 |
+| 法規/政策查詢 | 資料會更新，要即時 |
+
+### 用 Fine-tune 的情況
+
+| 場景 | 原因 |
+|------|------|
+| 客服機器人要用特定語氣 | 改變說話風格 |
+| 輸出要固定 JSON 格式 | 改變輸出行為 |
+| 學習專業領域術語用法 | 改變表達方式 |
+| 角色扮演（永遠是某角色） | 改變人格設定 |
+
+### 一句話總結
+
+> **RAG = 給模型「開書考試」**
+> **Fine-tune = 讓模型「變成專家」**
+
+實務上 **RAG 優先**，因為成本低、更新容易、不破壞模型原有能力。Fine-tune 是最後手段。
+
+---
+
+## LoRA（Low-Rank Adaptation）
+
+一種高效的微調方法，不動原始權重，只訓練小型「適配器」。
+
+### 核心概念
+
+LoRA 不是把大模型轉成小模型，而是在原始模型旁邊「並聯」一個小適配器：
+
+```mermaid
+flowchart TB
+    X[輸入 x]
+    X --> W
+    X --> AB
+
+    subgraph 並聯計算
+        W[W - 大 - 凍結不動]
+        AB[AxB - 小 - 可訓練]
+    end
+
+    W --> WX[W x]
+    AB --> ABX[AxB x]
+
+    WX --> SUM(("＋"))
+    ABX --> SUM
+
+    SUM --> Y[輸出 y]
+```
+
+- 輸入 x 同時進入原始權重 W 和適配器 A×B
+- 兩邊的輸出相加，得到最終結果
+- 訓練時只更新 A 和 B，W 完全不動
+
+### 為什麼高效？
+
+| 方式 | 訓練參數量 | 7B 模型 VRAM |
+|------|------------|--------------|
+| 全量微調 | 100% | ~60+ GB |
+| LoRA | ~0.1-1% | ~16 GB |
+| QLoRA (4-bit) | ~0.1-1% | ~6 GB |
+
+**範例：** 7B 模型全量微調需訓練 70 億參數，LoRA 只需訓練約 700 萬～7000 萬參數。
+
+### LoRA 插入位置
+
+LoRA 不是每層都插，可以選擇插在哪些模組：
+
+```mermaid
+flowchart TB
+    subgraph TB1 [Transformer Block - 每層]
+        subgraph ATT [Attention 層 - 常插這裡]
+            direction LR
+            Q --- K --- V --- O
+        end
+        subgraph FFN [FFN 層 - 有時也插]
+            F[FFN]
+        end
+        ATT --> FFN
+    end
+```
+
+| 設定 | 插入位置 | 說明 |
+|------|----------|------|
+| 最小 | Q, V | 最常見，通常夠用 |
+| 標準 | Q, K, V, O | 效果更好 |
+| 完整 | Q, K, V, O + FFN | 參數較多 |
+
+**適配器數量 = 選擇的模組數 × 模型層數**
+
+例如：32 層模型，插 Q 和 V = 64 個適配器
+
+### LoRA 參數設定
+
+| 參數 | 說明 | 常用值 |
+|------|------|--------|
+| `lora_target` | 插在哪些模組 | q_proj,v_proj |
+| `lora_rank` | 低秩的 r 值 | 8, 16, 32 |
+| `lora_alpha` | 縮放係數 | rank 的 2 倍 |
+
+**低秩分解範例（rank=8）：**
+```
+原始 W：4096 × 4096 = 16,777,216 參數
+LoRA A：4096 × 8    =    32,768 參數
+LoRA B：8 × 4096    =    32,768 參數
+總共：                   65,536 參數（原本的 0.4%）
+```
+
+### 微調輸出檔案
+
+LoRA 微調後會產生兩個部分：
+
+```
+輸出資料夾/
+├── adapter_config.json        ← LoRA 設定
+├── adapter_model.safetensors  ← LoRA 權重（幾十 MB）
+└── （原始模型不複製，引用原本的）
+```
+
+### 使用方式
+
+**方式 1：分開載入（開發時）**
+
+```
+原始模型 + LoRA A → 客服風格
+原始模型 + LoRA B → 程式助手
+原始模型 + LoRA C → 翻譯專家
+```
+
+可隨時切換不同 LoRA，一個原始模型搭配多個適配器。
+
+**方式 2：合併成單一模型（部署時）**
+
+```
+原始模型 + LoRA → 合併 → 新模型 → 轉 GGUF → Ollama
+```
+
+### LoRA 的優點
+
+| 優點 | 說明 |
+|------|------|
+| 省記憶體 | 可在消費級 GPU 上微調 |
+| 可切換 | 多個 LoRA 隨時切換 |
+| 不破壞原模型 | 原始權重完全不動 |
+| 易分享 | LoRA 檔案只有幾十 MB |
+
+### 相關工具
+
+| 工具 | 說明 |
+|------|------|
+| PEFT | Hugging Face 的 LoRA 實作 |
+| QLoRA | 量化 + LoRA，更省記憶體 |
+| Unsloth | 加速 LoRA 訓練的工具 |
+
+---
+
+## 微調資料格式
+
+Fine-tune 需要準備訓練資料，常見兩種格式：
+
+### Alpaca 格式
+
+Stanford Alpaca 定義，適合**單輪指令任務**。
+
+```json
+{
+  "instruction": "將以下句子翻譯成英文",
+  "input": "今天天氣很好",
+  "output": "The weather is nice today."
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| instruction | 任務指令（必填） |
+| input | 額外輸入內容（可選，可為空字串） |
+| output | 期望的輸出（必填） |
+
+**完整範例（多筆）：**
+
+```json
+[
+  {
+    "instruction": "總結這段文字",
+    "input": "人工智慧是計算機科學的一個分支...",
+    "output": "AI 是電腦科學分支，研究如何讓機器模擬人類智慧。"
+  },
+  {
+    "instruction": "寫一首關於春天的俳句",
+    "input": "",
+    "output": "櫻花飄落時\n微風輕拂過臉龐\n春意正盎然"
+  }
+]
+```
+
+### ShareGPT 格式
+
+來自 ShareGPT 網站，適合**多輪對話**。
+
+```json
+{
+  "conversations": [
+    { "from": "human", "value": "什麼是機器學習？" },
+    { "from": "gpt", "value": "機器學習是 AI 的子領域，讓電腦從資料中學習規律..." },
+    { "from": "human", "value": "可以舉個例子嗎？" },
+    { "from": "gpt", "value": "例如垃圾郵件過濾器，它從大量標記的郵件中學習..." }
+  ]
+}
+```
+
+| 欄位 | 說明 |
+|------|------|
+| from | 說話者：`human`（使用者）或 `gpt`（模型） |
+| value | 對話內容 |
+
+### 兩種格式比較
+
+| 比較項目 | Alpaca | ShareGPT |
+|----------|--------|----------|
+| 對話輪數 | 單輪 | 多輪 |
+| 結構 | instruction/input/output | conversations 陣列 |
+| 適用場景 | 指令遵循、任務完成 | 聊天、對話機器人 |
+| 複雜度 | 簡單 | 較複雜 |
+
+---
+
+## Easy Dataset（訓練資料產生工具）
+
+用於產生 LLM 微調、RAG 訓練資料的 GUI 工具。
+
+GitHub: https://github.com/ConardLi/easy-dataset
+
+### 特點
+
+| 特點 | 說明 |
+|------|------|
+| 支援 Ollama | 可用本地模型產生資料，省 API 費用 |
+| 多種輸出格式 | Alpaca、ShareGPT 都支援 |
+| 文件解析 | 支援 PDF、Word、Markdown 等格式 |
+| 智慧切分 | 自動將長文件切成適當 chunks |
+| 多輪對話 | 可產生單輪 QA 或多輪對話資料集 |
+
+### 工作流程
+
+```
+上傳文件（PDF/Word/MD）
+        ↓
+    文件解析 & 切分
+        ↓
+    LLM 產生問答對
+        ↓
+    人工審核/編輯
+        ↓
+    匯出訓練資料（Alpaca/ShareGPT 格式）
+```
+
+### 支援的 LLM API
+
+- OpenAI
+- Ollama（本地模型）
+- 智譜 AI
+- 阿里百煉
+- OpenRouter
+- 其他 OpenAI 相容 API
+
+### 使用場景
+
+| 場景 | 說明 |
+|------|------|
+| 微調資料集 | 從公司文件產生 instruction-tuning 資料 |
+| RAG 測試資料 | 產生 QA pairs 用於評估 RAG 效果 |
+| 合成資料 | 用大模型產生資料來訓練小模型 |
+
+---
+
+## LLaMA-Factory（微調訓練工具）
+
+統一的 LLM 微調框架，支援 100+ 種模型，有 Web UI。
+
+GitHub: https://github.com/hiyouga/LLaMA-Factory
+
+### 特點
+
+| 特點 | 說明 |
+|------|------|
+| 支援模型多 | Llama、Qwen、Mistral、ChatGLM、DeepSeek 等 100+ 種 |
+| 多種微調方式 | Full、Freeze、LoRA、QLoRA（2/3/4/5/6/8-bit） |
+| 有 Web UI | LlamaBoard 圖形介面，不用寫程式 |
+| 資料格式 | 支援 Alpaca、ShareGPT、ChatML |
+
+### 支援的微調方法
+
+| 方法 | VRAM 需求 | 說明 |
+|------|-----------|------|
+| Full Fine-tune | 最高 | 訓練所有參數 |
+| Freeze | 中 | 凍結部分層 |
+| LoRA | 低 | 只訓練低秩適配器 |
+| QLoRA | 最低 | 量化 + LoRA，消費級 GPU 可跑 |
+
+### 進階功能
+
+| 功能 | 說明 |
+|------|------|
+| FlashAttention-2 | 加速注意力計算 |
+| NEFTune | 訓練時加噪音，提升效果 |
+| DoRA / LoRA+ | LoRA 的改進版本 |
+| Unsloth 整合 | 進一步加速訓練 |
+
+### 支援任務類型
+
+- 單輪/多輪對話
+- Function Calling（工具調用）
+- 圖像理解（多模態）
+- 影片/音訊理解
+
+### 快速開始
+
+```bash
+# 安裝
+git clone https://github.com/hiyouga/LLaMA-Factory.git
+cd LLaMA-Factory
+pip install -e ".[torch,metrics]"
+
+# 啟動 Web UI
+llamafactory-cli webui
+```
+
+### 工作流程
+
+```
+準備資料（Alpaca/ShareGPT 格式）
+        ↓
+    LlamaBoard Web UI
+        ↓
+    選擇模型 & 微調方法
+        ↓
+    設定參數 & 開始訓練
+        ↓
+    匯出模型（可轉成 GGUF 給 Ollama 用）
+```
+
+### 與其他工具搭配
+
+```
+Easy Dataset ──→ 產生訓練資料
+      ↓
+LLaMA-Factory ──→ 微調模型
+      ↓
+Ollama ──→ 部署推理
+```
